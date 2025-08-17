@@ -75,7 +75,12 @@ CHROME_DRIVER_PATH=/path/to/chromedriver
 
 ### Dashboard URLs
 
-Update the dashboard URL in `config.py` or use the sidebar input field.
+The app is configured to work with the WaaS dashboard at:
+- **Base URL**: https://app.waas.sdsaz.us
+- **Login URL**: https://app.waas.sdsaz.us/auth/login?returnUrl=%2Fcases%2Fworkflow%2F2
+- **Workflow Dashboard**: https://app.waas.sdsaz.us/cases/workflow/2
+
+Update these URLs in `config.py` or use the sidebar input fields.
 
 ## Security Notes
 

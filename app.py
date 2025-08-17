@@ -99,41 +99,129 @@ class DashboardScraper:
                 return False
         
         try:
-            # Navigate to login page (you may need to adjust this URL)
-            login_url = "https://app.waas.sdsaz.us/login"
+            # Navigate to the actual login page
+            login_url = "https://app.waas.sdsaz.us/auth/login?returnUrl=%2Fcases%2Fworkflow%2F2"
             self.driver.get(login_url)
             
-            # Wait for login form to load
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.NAME, "username"))
-            )
+            # Wait for login form to load - try different selectors
+            username_field = None
+            password_field = None
             
-            # Find and fill username field
-            username_field = self.driver.find_element(By.NAME, "username")
+            # Try to find username field with different selectors
+            selectors = [
+                (By.NAME, "username"),
+                (By.NAME, "email"),
+                (By.ID, "username"),
+                (By.ID, "email"),
+                (By.CSS_SELECTOR, "input[type='text']"),
+                (By.CSS_SELECTOR, "input[type='email']")
+            ]
+            
+            for selector_type, selector_value in selectors:
+                try:
+                    username_field = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((selector_type, selector_value))
+                    )
+                    break
+                except:
+                    continue
+            
+            if not username_field:
+                st.error("Could not find username field. Please check the login page structure.")
+                return False
+            
+            # Try to find password field
+            password_selectors = [
+                (By.NAME, "password"),
+                (By.ID, "password"),
+                (By.CSS_SELECTOR, "input[type='password']")
+            ]
+            
+            for selector_type, selector_value in password_selectors:
+                try:
+                    password_field = self.driver.find_element(selector_type, selector_value)
+                    break
+                except:
+                    continue
+            
+            if not password_field:
+                st.error("Could not find password field. Please check the login page structure.")
+                return False
+            
+            # Fill in credentials
+            username_field.clear()
             username_field.send_keys(username)
             
-            # Find and fill password field
-            password_field = self.driver.find_element(By.NAME, "password")
+            password_field.clear()
             password_field.send_keys(password)
             
+            # Try to find and click submit button
+            submit_selectors = [
+                (By.XPATH, "//button[@type='submit']"),
+                (By.XPATH, "//input[@type='submit']"),
+                (By.CSS_SELECTOR, "button[type='submit']"),
+                (By.CSS_SELECTOR, "input[type='submit']"),
+                (By.XPATH, "//button[contains(text(), 'Login')]"),
+                (By.XPATH, "//button[contains(text(), 'Sign In')]")
+            ]
+            
+            submit_button = None
+            for selector_type, selector_value in submit_selectors:
+                try:
+                    submit_button = self.driver.find_element(selector_type, selector_value)
+                    break
+                except:
+                    continue
+            
+            if not submit_button:
+                st.error("Could not find submit button. Please check the login page structure.")
+                return False
+            
             # Submit form
-            submit_button = self.driver.find_element(By.XPATH, "//button[@type='submit']")
             submit_button.click()
             
             # Wait for redirect or dashboard to load
-            time.sleep(3)
+            time.sleep(5)
             
-            # Check if login was successful
-            if "dashboard" in self.driver.current_url or "login" not in self.driver.current_url:
+            # Check if login was successful - look for dashboard indicators
+            current_url = self.driver.current_url
+            page_source = self.driver.page_source.lower()
+            
+            # Check various success indicators
+            success_indicators = [
+                "dashboard" in current_url,
+                "cases" in current_url,
+                "workflow" in current_url,
+                "login" not in current_url,
+                "dashboard" in page_source,
+                "welcome" in page_source,
+                "logout" in page_source
+            ]
+            
+            if any(success_indicators):
                 self.is_authenticated = True
-                st.success("Login successful!")
+                st.success("Login successful! Redirected to dashboard.")
                 return True
             else:
-                st.error("Login failed. Please check credentials.")
+                # Check for error messages
+                error_indicators = [
+                    "invalid credentials",
+                    "login failed",
+                    "authentication failed",
+                    "incorrect username or password"
+                ]
+                
+                for error in error_indicators:
+                    if error in page_source:
+                        st.error(f"Login failed: {error}")
+                        return False
+                
+                st.error("Login failed. Please check credentials and try again.")
                 return False
                 
         except Exception as e:
             st.error(f"Login error: {e}")
+            st.info("This might be due to the login page structure. Please check the dashboard URL.")
             return False
     
     def scrape_dashboard(self, dashboard_url):
@@ -231,6 +319,18 @@ def main():
     if 'ai_processor' not in st.session_state:
         st.session_state.ai_processor = None
     
+    # Load configuration from Streamlit secrets or environment
+    try:
+        import config
+        dashboard_base_url = config.Config.DASHBOARD_BASE_URL
+        dashboard_url = config.Config.DASHBOARD_URL
+        login_url = config.Config.LOGIN_URL
+    except:
+        # Fallback to environment variables or defaults
+        dashboard_base_url = "https://app.waas.sdsaz.us"
+        dashboard_url = "https://app.waas.sdsaz.us/cases/workflow/2"
+        login_url = "https://app.waas.sdsaz.us/auth/login?returnUrl=%2Fcases%2Fworkflow%2F2"
+    
     # Sidebar for configuration
     with st.sidebar:
         st.header("🔧 Configuration")
@@ -243,27 +343,49 @@ def main():
         # Dashboard URL
         dashboard_url = st.text_input(
             "Dashboard URL",
-            value="https://app.waas.sdsaz.us/dashboard/7",
-            help="URL of the dashboard to scrape"
+            value="https://app.waas.sdsaz.us/cases/workflow/2",
+            help="URL of the dashboard to scrape after login"
         )
         
         # Login section
         st.header("🔐 Authentication")
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
         
-        if st.button("Login"):
+        # Check if we have stored credentials
+        if 'stored_username' not in st.session_state:
+            st.session_state.stored_username = ""
+        if 'stored_password' not in st.session_state:
+            st.session_state.stored_password = ""
+        
+        # Credential input
+        username = st.text_input("Username", value=st.session_state.stored_username)
+        password = st.text_input("Password", type="password", value=st.session_state.stored_password)
+        
+        # Remember credentials option
+        remember_creds = st.checkbox("Remember credentials (stored in session only)")
+        
+        if st.button("Login", type="primary"):
             if username and password:
-                with st.spinner("Logging in..."):
+                with st.spinner("Logging in to dashboard..."):
                     success = st.session_state.scraper.login(username, password)
                     if success:
                         st.session_state.is_authenticated = True
+                        if remember_creds:
+                            st.session_state.stored_username = username
+                            st.session_state.stored_password = password
+                        st.success("✅ Successfully logged into dashboard!")
+                    else:
+                        st.error("❌ Login failed. Please check your credentials.")
             else:
-                st.warning("Please enter both username and password")
+                st.warning("⚠️ Please enter both username and password")
         
-        # Save credentials option
-        if st.checkbox("Remember credentials"):
-            st.info("Credentials will be saved locally (encrypted)")
+        # Show login status
+        if st.session_state.is_authenticated:
+            st.success("🔓 Logged in to dashboard")
+            if st.button("Logout"):
+                st.session_state.is_authenticated = False
+                st.session_state.stored_username = ""
+                st.session_state.stored_password = ""
+                st.rerun()
     
     # Main content area
     if st.session_state.is_authenticated:

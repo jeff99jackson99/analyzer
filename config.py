@@ -11,7 +11,8 @@ class Config:
     
     # Dashboard URLs
     DASHBOARD_BASE_URL = "https://app.waas.sdsaz.us"
-    DASHBOARD_URL = "https://app.waas.sdsaz.us/dashboard/7"
+    DASHBOARD_URL = "https://app.waas.sdsaz.us/cases/workflow/2"
+    LOGIN_URL = "https://app.waas.sdsaz.us/auth/login?returnUrl=%2Fcases%2Fworkflow%2F2"
     
     # Selenium settings
     CHROME_DRIVER_PATH = os.getenv('CHROME_DRIVER_PATH')

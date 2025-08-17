@@ -68,8 +68,8 @@ Get your Dashboard Claims Analyzer running in 5 minutes!
 ## 🎯 First Time Usage
 
 1. **Enter your OpenAI API key** in the sidebar
-2. **Login** with your dashboard credentials
-3. **Click "Scrape Dashboard"** to gather data
+2. **Login** with your WaaS dashboard credentials (same as https://app.waas.sdsaz.us)
+3. **Click "Scrape Dashboard"** to gather data from the workflow
 4. **Use "Analyze with AI"** to process the content
 5. **Review highlighted claims** that can move forward
 
