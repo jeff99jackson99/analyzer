@@ -59,7 +59,18 @@ class DashboardScraper:
         try:
             # Try to access the dashboard directly
             dashboard_url = "https://app.waas.sdsaz.us/cases/workflow/2"
-            response = self.session.get(dashboard_url)
+            
+            # Add some headers to make the request look more like a browser
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+            }
+            
+            response = self.session.get(dashboard_url, headers=headers, timeout=10)
             
             if response.status_code == 200:
                 # Check if we're actually logged in by looking for dashboard content
@@ -247,30 +258,32 @@ def main():
             4. **Start scraping** once authenticated!
             """)
             
-            # Button to redirect to WaaS dashboard
-            if st.button("🚀 Go to WaaS Dashboard", type="primary"):
-                st.markdown(f"""
-                <div style="background-color: #e7f3ff; padding: 15px; border-radius: 5px; border: 1px solid #b3d9ff;">
-                    <h4>📋 Instructions:</h4>
-                    <ol>
-                        <li>Click the link below to open the WaaS dashboard</li>
-                        <li>Log in with your credentials</li>
-                        <li>Return to this app tab</li>
-                        <li>Click "Check Login Status" button</li>
-                    </ol>
-                    <p><strong>🔗 <a href="{dashboard_url}" target="_blank">Open WaaS Dashboard</a></strong></p>
-                </div>
-                """, unsafe_allow_html=True)
+            # Instructions and dashboard link
+            st.markdown(f"""
+            <div style="background-color: #e7f3ff; padding: 15px; border-radius: 5px; border: 1px solid #b3d9ff;">
+                <h4>📋 Instructions:</h4>
+                <ol>
+                    <li>Click the link below to open the WaaS dashboard</li>
+                    <li>Log in with your credentials</li>
+                    <li>Return to this app tab</li>
+                    <li>Click "Check Login Status" button below</li>
+                </ol>
+                <p><strong>🔗 <a href="{dashboard_url}" target="_blank">Open WaaS Dashboard</a></strong></p>
+            </div>
+            """, unsafe_allow_html=True)
             
             # Check login status button
-            if st.button("🔍 Check Login Status", type="secondary"):
+            if st.button("🔍 Check Login Status", type="primary"):
                 with st.spinner("Checking login status..."):
-                    if st.session_state.scraper.check_login_status():
-                        st.session_state.is_authenticated = True
-                        st.success("✅ Successfully authenticated with WaaS dashboard!")
-                        st.rerun()
-                    else:
-                        st.error("❌ Not authenticated. Please log in to the WaaS dashboard first.")
+                    try:
+                        if st.session_state.scraper.check_login_status():
+                            st.session_state.is_authenticated = True
+                            st.success("✅ Successfully authenticated with WaaS dashboard!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Not authenticated. Please log in to the WaaS dashboard first.")
+                    except Exception as e:
+                        st.error(f"❌ Error checking login status: {e}")
         else:
             st.success("🔓 **Authenticated with WaaS Dashboard**")
             if st.button("Logout"):
