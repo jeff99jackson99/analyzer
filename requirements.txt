@@ -1,3 +1,5 @@
+# Streamlit Cloud Compatible Requirements
+# Updated to remove Selenium dependencies
 streamlit
 requests
 beautifulsoup4
