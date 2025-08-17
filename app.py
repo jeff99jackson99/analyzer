@@ -69,13 +69,28 @@ class DashboardScraper:
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-plugins")
+        chrome_options.add_argument("--disable-images")
         
         try:
-            self.driver = webdriver.Chrome(options=chrome_options)
+            # Try to use webdriver-manager for automatic driver management
+            from webdriver_manager.chrome import ChromeDriverManager
+            from selenium.webdriver.chrome.service import Service
+            
+            service = Service(ChromeDriverManager().install())
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
             return True
         except Exception as e:
             st.error(f"Failed to setup Chrome driver: {e}")
-            return False
+            st.info("Trying alternative setup...")
+            try:
+                # Fallback to system ChromeDriver
+                self.driver = webdriver.Chrome(options=chrome_options)
+                return True
+            except Exception as e2:
+                st.error(f"Alternative setup also failed: {e2}")
+                return False
     
     def login(self, username, password):
         """Login to the dashboard"""
