@@ -590,6 +590,27 @@ def main():
                         else:
                             st.warning(f"❌ {result['url']}: {result.get('error', 'Failed')}")
             
+            # Try API endpoints button
+            if st.button("🔌 Try API Endpoints", type="secondary"):
+                with st.spinner("Exploring API endpoints..."):
+                    api_results = st.session_state.scraper.try_api_endpoints()
+                    
+                    st.subheader("🔌 API Endpoint Analysis")
+                    st.info("Here's what we found in the API endpoints:")
+                    
+                    for result in api_results:
+                        if result['status'] == 200:
+                            st.markdown(f"""
+                            <div class="alternative-urls">
+                                <h4>🔌 {result['endpoint']}</h4>
+                                <p><strong>Data Type:</strong> {result['data_type']}</p>
+                                <p><strong>Content Length:</strong> {result['content_length']} characters</p>
+                                <p><strong>Preview:</strong> {result['preview']}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            st.warning(f"❌ {result['endpoint']}: {result['preview']}")
+            
             # Scrape button
             if st.button("🕷️ Scrape Dashboard", type="primary"):
                 with st.spinner("Scraping dashboard..."):
