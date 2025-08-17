@@ -53,6 +53,14 @@ st.markdown("""
         padding: 20px;
         margin: 15px 0;
     }
+    
+    .alternative-urls {
+        background-color: #fff3cd;
+        border: 1px solid #ffeaa7;
+        border-radius: 8px;
+        padding: 15px;
+        margin: 15px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -139,6 +147,59 @@ class DashboardScraper:
         except Exception as e:
             st.error(f"❌ Preview error: {e}")
             return None
+    
+    def try_multiple_urls(self):
+        """Try multiple dashboard URLs to find the one with content"""
+        urls_to_try = [
+            "https://app.waas.sdsaz.us/dashboard/7",
+            "https://app.waas.sdsaz.us/cases/workflow/2",
+            "https://app.waas.sdsaz.us/cases",
+            "https://app.waas.sdsaz.us/dashboard",
+            "https://app.waas.sdsaz.us/workflow"
+        ]
+        
+        results = []
+        
+        for url in urls_to_try:
+            try:
+                response = self.session.get(url, timeout=10)
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.content, 'html.parser')
+                    
+                    # Get content length
+                    content = soup.get_text(separator=' ', strip=True)
+                    content_length = len(content)
+                    
+                    # Count tables
+                    tables = soup.find_all('table')
+                    table_count = len(tables)
+                    
+                    # Look for claims-related content
+                    claims_indicators = soup.find_all(text=lambda text: text and any(
+                        claim in text.lower() for claim in ['claim', 'case', 'workflow', 'status', 'priority']
+                    ))
+                    
+                    results.append({
+                        'url': url,
+                        'status': response.status_code,
+                        'content_length': content_length,
+                        'table_count': table_count,
+                        'claims_indicators': len(claims_indicators),
+                        'preview': content[:200] + "..." if content_length > 200 else content
+                    })
+                    
+            except Exception as e:
+                results.append({
+                    'url': url,
+                    'status': 'Error',
+                    'error': str(e),
+                    'content_length': 0,
+                    'table_count': 0,
+                    'claims_indicators': 0,
+                    'preview': f"Error: {e}"
+                })
+        
+        return results
     
     def scrape_dashboard(self, dashboard_url):
         """Scrape the dashboard content using requests"""
@@ -339,6 +400,8 @@ def main():
         st.session_state.is_authenticated = False
     if 'show_preview' not in st.session_state:
         st.session_state.show_preview = False
+    if 'alternative_url' not in st.session_state:
+        st.session_state.alternative_url = None
     
     # Sidebar for configuration
     with st.sidebar:
@@ -444,6 +507,28 @@ def main():
         
         else:
             st.success("✅ Authenticated and ready to scrape!")
+            
+            # Try multiple URLs button
+            if st.button("🔍 Explore All Dashboard URLs", type="secondary"):
+                with st.spinner("Exploring different dashboard URLs..."):
+                    results = st.session_state.scraper.try_multiple_urls()
+                    
+                    st.subheader("🌐 Dashboard URL Analysis")
+                    st.info("Here's what we found across different dashboard URLs:")
+                    
+                    for result in results:
+                        if result['status'] == 200:
+                            st.markdown(f"""
+                            <div class="alternative-urls">
+                                <h4>🔗 {result['url']}</h4>
+                                <p><strong>Content Length:</strong> {result['content_length']} characters</p>
+                                <p><strong>Tables:</strong> {result['table_count']}</p>
+                                <p><strong>Claims Indicators:</strong> {result['claims_indicators']}</p>
+                                <p><strong>Preview:</strong> {result['preview']}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            st.warning(f"❌ {result['url']}: {result.get('error', 'Failed')}")
             
             # Scrape button
             if st.button("🕷️ Scrape Dashboard", type="primary"):
