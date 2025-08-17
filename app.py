@@ -45,6 +45,14 @@ st.markdown("""
         width: 100%;
         margin: 5px 0;
     }
+    
+    .dashboard-preview {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 20px;
+        margin: 15px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -58,7 +66,7 @@ class DashboardScraper:
         """Check if we're currently logged in by trying to access the dashboard"""
         try:
             # Try to access the dashboard directly
-            dashboard_url = "https://app.waas.sdsaz.us/cases/workflow/2"
+            dashboard_url = "https://app.waas.sdsaz.us/dashboard/7"
             
             # Add some headers to make the request look more like a browser
             headers = {
@@ -93,6 +101,44 @@ class DashboardScraper:
         except Exception as e:
             st.error(f"❌ Login check error: {e}")
             return False
+    
+    def get_dashboard_preview(self):
+        """Get a preview of the dashboard content"""
+        try:
+            dashboard_url = "https://app.waas.sdsaz.us/dashboard/7"
+            response = self.session.get(dashboard_url)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Extract key information
+                title = soup.find('title')
+                title_text = title.get_text() if title else "Dashboard"
+                
+                # Look for main content areas
+                main_content = soup.find('main') or soup.find('div', {'class': 'main'}) or soup.find('div', {'id': 'main'})
+                
+                if main_content:
+                    content = main_content.get_text(separator=' ', strip=True)[:500] + "..."
+                else:
+                    content = soup.get_text(separator=' ', strip=True)[:500] + "..."
+                
+                # Look for tables
+                tables = soup.find_all('table')
+                table_count = len(tables)
+                
+                return {
+                    'title': title_text,
+                    'content_preview': content,
+                    'table_count': table_count,
+                    'url': dashboard_url
+                }
+            
+            return None
+            
+        except Exception as e:
+            st.error(f"❌ Preview error: {e}")
+            return None
     
     def scrape_dashboard(self, dashboard_url):
         """Scrape the dashboard content using requests"""
@@ -229,6 +275,8 @@ def main():
         st.session_state.ai_processor = None
     if 'is_authenticated' not in st.session_state:
         st.session_state.is_authenticated = False
+    if 'show_preview' not in st.session_state:
+        st.session_state.show_preview = False
     
     # Sidebar for configuration
     with st.sidebar:
@@ -242,7 +290,7 @@ def main():
         # Dashboard URL
         dashboard_url = st.text_input(
             "Dashboard URL",
-            value="https://app.waas.sdsaz.us/cases/workflow/2",
+            value="https://app.waas.sdsaz.us/dashboard/7",
             help="URL of the dashboard to scrape after login"
         )
         
@@ -252,10 +300,10 @@ def main():
         if not st.session_state.is_authenticated:
             st.info("🔑 **New Authentication Flow:**")
             st.markdown("""
-            1. **Click the button below** to go to WaaS dashboard
+            1. **Click the link below** to go to WaaS dashboard
             2. **Log in** with your credentials on the WaaS site
             3. **Return to this app** and click "Check Login Status"
-            4. **Start scraping** once authenticated!
+            4. **View dashboard details** and start scraping!
             """)
             
             # Instructions and dashboard link
@@ -268,7 +316,7 @@ def main():
                     <li>Return to this app tab</li>
                     <li>Click "Check Login Status" button below</li>
                 </ol>
-                <p><strong>🔗 <a href="{dashboard_url}" target="_blank">Open WaaS Dashboard</a></strong></p>
+                <p><strong>🔗 <a href="https://app.waas.sdsaz.us/dashboard/7" target="_blank">Open WaaS Dashboard</a></strong></p>
             </div>
             """, unsafe_allow_html=True)
             
@@ -286,6 +334,22 @@ def main():
                         st.error(f"❌ Error checking login status: {e}")
         else:
             st.success("🔓 **Authenticated with WaaS Dashboard**")
+            
+            # Show dashboard preview and navigation options
+            st.subheader("📊 Dashboard Navigation")
+            st.info("You're now authenticated! Choose your next step:")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔍 Preview Dashboard", type="secondary"):
+                    st.session_state.show_preview = True
+                    st.rerun()
+            
+            with col2:
+                if st.button("🚀 Go Directly to Scraping", type="primary"):
+                    st.session_state.show_preview = False
+                    st.rerun()
+            
             if st.button("Logout"):
                 st.session_state.is_authenticated = False
                 st.session_state.scraper.is_authenticated = False
@@ -293,75 +357,101 @@ def main():
     
     # Main content area
     if st.session_state.is_authenticated:
-        st.success("✅ Authenticated and ready to scrape!")
-        
-        # Scrape button
-        if st.button("🕷️ Scrape Dashboard", type="primary"):
-            with st.spinner("Scraping dashboard..."):
-                dashboard_data = st.session_state.scraper.scrape_dashboard(dashboard_url)
-                
-                if dashboard_data:
-                    st.session_state.dashboard_data = dashboard_data
-                    st.success("Dashboard scraped successfully!")
-                    
-                    # Display raw content
-                    with st.expander("📋 Raw Dashboard Content"):
-                        st.text(dashboard_data['content'][:1000] + "..." if len(dashboard_data['content']) > 1000 else dashboard_data['content'])
-                    
-                    # Display tables if found
-                    if dashboard_data['tables']:
-                        st.subheader("📊 Tables Found")
-                        for i, table in enumerate(dashboard_data['tables']):
-                            with st.expander(f"Table {i+1}"):
-                                df = pd.DataFrame(table[1:], columns=table[0])
-                                st.dataframe(df)
-        
-        # AI Analysis section
-        if 'dashboard_data' in st.session_state and st.session_state.ai_processor:
-            st.header("🤖 AI Analysis")
+        if st.session_state.show_preview:
+            st.header("🔍 Dashboard Preview")
+            st.info("Showing preview of dashboard content. Click 'Start Scraping' when ready to proceed.")
             
-            if st.button("🧠 Analyze with AI"):
-                with st.spinner("Analyzing dashboard content..."):
-                    analysis = st.session_state.ai_processor.analyze_claims(
-                        st.session_state.dashboard_data['content']
-                    )
-                    
-                    if analysis:
-                        st.session_state.ai_analysis = analysis
-                        
-                        # Try to parse JSON response
-                        try:
-                            parsed_analysis = json.loads(analysis)
-                            display_ai_analysis(parsed_analysis)
-                        except json.JSONDecodeError:
-                            st.subheader("AI Analysis Results")
-                            st.text(analysis)
+            # Get dashboard preview
+            preview_data = st.session_state.scraper.get_dashboard_preview()
+            if preview_data:
+                st.markdown(f"""
+                <div class="dashboard-preview">
+                    <h3>📊 {preview_data['title']}</h3>
+                    <p><strong>URL:</strong> {preview_data['url']}</p>
+                    <p><strong>Tables Found:</strong> {preview_data['table_count']}</p>
+                    <p><strong>Content Preview:</strong></p>
+                    <div style="background-color: white; padding: 10px; border-radius: 5px; border: 1px solid #ddd;">
+                        {preview_data['content_preview']}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            if st.button("🕷️ Start Scraping", type="primary"):
+                st.session_state.show_preview = False
+                st.rerun()
         
-        # Display AI analysis if available
-        if 'ai_analysis' in st.session_state:
-            st.header("📈 Analysis Results")
-            try:
-                parsed_analysis = json.loads(st.session_state.ai_analysis)
-                display_ai_analysis(parsed_analysis)
-            except json.JSONDecodeError:
-                st.text(st.session_state.ai_analysis)
+        else:
+            st.success("✅ Authenticated and ready to scrape!")
+            
+            # Scrape button
+            if st.button("🕷️ Scrape Dashboard", type="primary"):
+                with st.spinner("Scraping dashboard..."):
+                    dashboard_data = st.session_state.scraper.scrape_dashboard(dashboard_url)
+                    
+                    if dashboard_data:
+                        st.session_state.dashboard_data = dashboard_data
+                        st.success("Dashboard scraped successfully!")
+                        
+                        # Display raw content
+                        with st.expander("📋 Raw Dashboard Content"):
+                            st.text(dashboard_data['content'][:1000] + "..." if len(dashboard_data['content']) > 1000 else dashboard_data['content'])
+                        
+                        # Display tables if found
+                        if dashboard_data['tables']:
+                            st.subheader("📊 Tables Found")
+                            for i, table in enumerate(dashboard_data['tables']):
+                                with st.expander(f"Table {i+1}"):
+                                    df = pd.DataFrame(table[1:], columns=table[0])
+                                    st.dataframe(df)
+            
+            # AI Analysis section
+            if 'dashboard_data' in st.session_state and st.session_state.ai_processor:
+                st.header("🤖 AI Analysis")
+                
+                if st.button("🧠 Analyze with AI"):
+                    with st.spinner("Analyzing dashboard content..."):
+                        analysis = st.session_state.ai_processor.analyze_claims(
+                            st.session_state.dashboard_data['content']
+                        )
+                        
+                        if analysis:
+                            st.session_state.ai_analysis = analysis
+                            
+                            # Try to parse JSON response
+                            try:
+                                parsed_analysis = json.loads(analysis)
+                                display_ai_analysis(parsed_analysis)
+                            except json.JSONDecodeError:
+                                st.subheader("AI Analysis Results")
+                                st.text(analysis)
+            
+            # Display AI analysis if available
+            if 'ai_analysis' in st.session_state:
+                st.header("📈 Analysis Results")
+                try:
+                    parsed_analysis = json.loads(st.session_state.ai_analysis)
+                    display_ai_analysis(parsed_analysis)
+                except json.JSONDecodeError:
+                    st.text(st.session_state.ai_analysis)
     
     else:
         st.info("👋 Welcome! Please use the sidebar to authenticate with the WaaS dashboard.")
         st.markdown("""
         ### What this app does:
         1. **Redirects you** to the WaaS dashboard for secure login
-        2. **Scrapes** the workflow/cases dashboard content
-        3. **Uses AI** to analyze and organize the content
-        4. **Highlights** claims that can move forward
-        5. **Creates** a structured worksheet for easy review
+        2. **Shows dashboard preview** after authentication
+        3. **Scrapes** the workflow/cases dashboard content
+        4. **Uses AI** to analyze and organize the content
+        5. **Highlights** claims that can move forward
+        6. **Creates** a structured worksheet for easy review
         
         ### Getting Started:
         1. Enter your OpenAI API key in the sidebar
-        2. Click "Go to WaaS Dashboard" to authenticate
+        2. Click "Open WaaS Dashboard" to authenticate
         3. Log in on the WaaS site
         4. Return and click "Check Login Status"
-        5. Start scraping and analyzing!
+        5. Preview dashboard content
+        6. Start scraping and analyzing!
         """)
 
 def display_ai_analysis(analysis):
