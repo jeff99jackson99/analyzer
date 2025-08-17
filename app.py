@@ -112,8 +112,13 @@ class DashboardScraper:
             if csrf_token:
                 login_data[csrf_token.get('name')] = csrf_token.get('value')
             
-            # Submit login form
-            login_response = self.session.post(login_url, data=login_data, allow_redirects=True)
+            # Submit login form - try both POST and GET methods
+            try:
+                login_response = self.session.post(login_url, data=login_data, allow_redirects=True)
+            except Exception as e:
+                st.warning(f"POST method failed, trying GET: {e}")
+                # Try GET method if POST fails
+                login_response = self.session.get(login_url, params=login_data, allow_redirects=True)
             
             # Check if login was successful
             if login_response.status_code == 200:
@@ -245,6 +250,8 @@ def main():
         st.session_state.scraper = DashboardScraper()
     if 'ai_processor' not in st.session_state:
         st.session_state.ai_processor = None
+    if 'is_authenticated' not in st.session_state:
+        st.session_state.is_authenticated = False
     
     # Load configuration from Streamlit secrets or environment
     try:
