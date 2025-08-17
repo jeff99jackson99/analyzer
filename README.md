@@ -50,6 +50,10 @@ brew install chromedriver
 
 1. Run the application:
 ```bash
+# For local development (with Selenium):
+streamlit run app-selenium.py
+
+# For Streamlit Cloud deployment:
 streamlit run app.py
 ```
 

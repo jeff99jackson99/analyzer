@@ -7,12 +7,6 @@ import json
 from datetime import datetime
 import time
 import os
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-import pickle
 
 # Page configuration
 st.set_page_config(
@@ -52,191 +46,120 @@ st.markdown("""
         margin: 10px 0;
         border-left: 4px solid #1f77b4;
     }
+    .warning-box {
+        background-color: #f8d7da;
+        border: 1px solid #f5c6cb;
+        border-radius: 5px;
+        padding: 15px;
+        margin: 15px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 class DashboardScraper:
     def __init__(self):
         self.session = requests.Session()
-        self.driver = None
         self.is_authenticated = False
+        self.cookies = {}
         
-    def setup_driver(self):
-        """Setup Chrome driver with options"""
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument("--disable-extensions")
-        chrome_options.add_argument("--disable-plugins")
-        chrome_options.add_argument("--disable-images")
-        
-        try:
-            # Try to use webdriver-manager for automatic driver management
-            from webdriver_manager.chrome import ChromeDriverManager
-            from selenium.webdriver.chrome.service import Service
-            
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
-            return True
-        except Exception as e:
-            st.error(f"Failed to setup Chrome driver: {e}")
-            st.info("Trying alternative setup...")
-            try:
-                # Fallback to system ChromeDriver
-                self.driver = webdriver.Chrome(options=chrome_options)
-                return True
-            except Exception as e2:
-                st.error(f"Alternative setup also failed: {e2}")
-                return False
-    
     def login(self, username, password):
-        """Login to the dashboard"""
-        if not self.driver:
-            if not self.setup_driver():
-                return False
-        
+        """Login to the dashboard using requests"""
         try:
-            # Navigate to the actual login page
+            # First, get the login page to capture any CSRF tokens
             login_url = "https://app.waas.sdsaz.us/auth/login?returnUrl=%2Fcases%2Fworkflow%2F2"
-            self.driver.get(login_url)
+            response = self.session.get(login_url)
             
-            # Wait for login form to load - try different selectors
-            username_field = None
-            password_field = None
-            
-            # Try to find username field with different selectors
-            selectors = [
-                (By.NAME, "username"),
-                (By.NAME, "email"),
-                (By.ID, "username"),
-                (By.ID, "email"),
-                (By.CSS_SELECTOR, "input[type='text']"),
-                (By.CSS_SELECTOR, "input[type='email']")
-            ]
-            
-            for selector_type, selector_value in selectors:
-                try:
-                    username_field = WebDriverWait(self.driver, 5).until(
-                        EC.presence_of_element_located((selector_type, selector_value))
-                    )
-                    break
-                except:
-                    continue
-            
-            if not username_field:
-                st.error("Could not find username field. Please check the login page structure.")
+            if response.status_code != 200:
+                st.error(f"Failed to access login page. Status: {response.status_code}")
                 return False
+            
+            # Parse the login page to find form fields
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Look for common form field names
+            username_field_name = None
+            password_field_name = None
+            
+            # Try to find username field
+            username_selectors = ['input[name="username"]', 'input[name="email"]', 'input[type="text"]']
+            for selector in username_selectors:
+                field = soup.select_one(selector)
+                if field and field.get('name'):
+                    username_field_name = field.get('name')
+                    break
             
             # Try to find password field
-            password_selectors = [
-                (By.NAME, "password"),
-                (By.ID, "password"),
-                (By.CSS_SELECTOR, "input[type='password']")
-            ]
-            
-            for selector_type, selector_value in password_selectors:
-                try:
-                    password_field = self.driver.find_element(selector_type, selector_value)
+            password_selectors = ['input[name="password"]', 'input[type="password"]']
+            for selector in password_selectors:
+                field = soup.select_one(selector)
+                if field and field.get('name'):
+                    password_field_name = field.get('name')
                     break
-                except:
-                    continue
             
-            if not password_field:
-                st.error("Could not find password field. Please check the login page structure.")
-                return False
+            if not username_field_name or not password_field_name:
+                st.warning("⚠️ Could not automatically detect form fields. Using manual input.")
+                username_field_name = st.text_input("Enter username field name:", value="username")
+                password_field_name = st.text_input("Enter password field name:", value="password")
             
-            # Fill in credentials
-            username_field.clear()
-            username_field.send_keys(username)
+            # Prepare login data
+            login_data = {
+                username_field_name: username,
+                password_field_name: password
+            }
             
-            password_field.clear()
-            password_field.send_keys(password)
+            # Look for CSRF token
+            csrf_token = soup.find('input', {'name': 'csrf'}) or soup.find('input', {'name': '_token'})
+            if csrf_token:
+                login_data[csrf_token.get('name')] = csrf_token.get('value')
             
-            # Try to find and click submit button
-            submit_selectors = [
-                (By.XPATH, "//button[@type='submit']"),
-                (By.XPATH, "//input[@type='submit']"),
-                (By.CSS_SELECTOR, "button[type='submit']"),
-                (By.CSS_SELECTOR, "input[type='submit']"),
-                (By.XPATH, "//button[contains(text(), 'Login')]"),
-                (By.XPATH, "//button[contains(text(), 'Sign In')]")
-            ]
+            # Submit login form
+            login_response = self.session.post(login_url, data=login_data, allow_redirects=True)
             
-            submit_button = None
-            for selector_type, selector_value in submit_selectors:
-                try:
-                    submit_button = self.driver.find_element(selector_type, selector_value)
-                    break
-                except:
-                    continue
-            
-            if not submit_button:
-                st.error("Could not find submit button. Please check the login page structure.")
-                return False
-            
-            # Submit form
-            submit_button.click()
-            
-            # Wait for redirect or dashboard to load
-            time.sleep(5)
-            
-            # Check if login was successful - look for dashboard indicators
-            current_url = self.driver.current_url
-            page_source = self.driver.page_source.lower()
-            
-            # Check various success indicators
-            success_indicators = [
-                "dashboard" in current_url,
-                "cases" in current_url,
-                "workflow" in current_url,
-                "login" not in current_url,
-                "dashboard" in page_source,
-                "welcome" in page_source,
-                "logout" in page_source
-            ]
-            
-            if any(success_indicators):
-                self.is_authenticated = True
-                st.success("Login successful! Redirected to dashboard.")
-                return True
+            # Check if login was successful
+            if login_response.status_code == 200:
+                # Check if we're redirected to a dashboard page
+                final_url = login_response.url
+                if any(indicator in final_url.lower() for indicator in ['dashboard', 'cases', 'workflow']):
+                    self.is_authenticated = True
+                    self.cookies = self.session.cookies.get_dict()
+                    st.success("✅ Login successful! Redirected to dashboard.")
+                    return True
+                else:
+                    # Check for error messages in the response
+                    soup = BeautifulSoup(login_response.content, 'html.parser')
+                    error_messages = soup.find_all(text=lambda text: text and any(
+                        error in text.lower() for error in ['invalid', 'failed', 'incorrect', 'error']
+                    ))
+                    
+                    if error_messages:
+                        st.error(f"❌ Login failed: {error_messages[0]}")
+                    else:
+                        st.error("❌ Login failed. Please check your credentials.")
+                    return False
             else:
-                # Check for error messages
-                error_indicators = [
-                    "invalid credentials",
-                    "login failed",
-                    "authentication failed",
-                    "incorrect username or password"
-                ]
-                
-                for error in error_indicators:
-                    if error in page_source:
-                        st.error(f"Login failed: {error}")
-                        return False
-                
-                st.error("Login failed. Please check credentials and try again.")
+                st.error(f"❌ Login request failed with status: {login_response.status_code}")
                 return False
                 
         except Exception as e:
-            st.error(f"Login error: {e}")
-            st.info("This might be due to the login page structure. Please check the dashboard URL.")
+            st.error(f"❌ Login error: {e}")
             return False
     
     def scrape_dashboard(self, dashboard_url):
-        """Scrape the dashboard content"""
+        """Scrape the dashboard content using requests"""
         if not self.is_authenticated:
             st.error("Please login first")
             return None
         
         try:
-            self.driver.get(dashboard_url)
-            time.sleep(3)  # Wait for page to load
+            # Use the authenticated session to get the dashboard
+            response = self.session.get(dashboard_url)
             
-            # Get page source
-            page_source = self.driver.page_source
-            soup = BeautifulSoup(page_source, 'html.parser')
+            if response.status_code != 200:
+                st.error(f"Failed to access dashboard. Status: {response.status_code}")
+                return None
+            
+            # Parse the dashboard content
+            soup = BeautifulSoup(response.content, 'html.parser')
             
             # Extract all text content
             content = soup.get_text(separator=' ', strip=True)
@@ -259,17 +182,13 @@ class DashboardScraper:
             return {
                 'content': content,
                 'tables': table_data,
-                'html': page_source
+                'html': response.text,
+                'url': response.url
             }
             
         except Exception as e:
             st.error(f"Scraping error: {e}")
             return None
-    
-    def close(self):
-        """Close the browser driver"""
-        if self.driver:
-            self.driver.quit()
 
 class AIProcessor:
     def __init__(self, api_key):
@@ -313,6 +232,14 @@ class AIProcessor:
 def main():
     st.markdown('<h1 class="main-header">📊 Dashboard Claims Analyzer</h1>', unsafe_allow_html=True)
     
+    # Show Streamlit Cloud notice
+    st.markdown("""
+    <div class="warning-box">
+        <strong>🌐 Streamlit Cloud Version</strong><br>
+        This version is optimized for Streamlit Cloud deployment. It uses HTTP requests instead of browser automation for better compatibility.
+    </div>
+    """, unsafe_allow_html=True)
+    
     # Initialize session state
     if 'scraper' not in st.session_state:
         st.session_state.scraper = DashboardScraper()
@@ -343,7 +270,7 @@ def main():
         # Dashboard URL
         dashboard_url = st.text_input(
             "Dashboard URL",
-            value="https://app.waas.sdsaz.us/cases/workflow/2",
+            value=dashboard_url,
             help="URL of the dashboard to scrape after login"
         )
         
@@ -446,21 +373,18 @@ def main():
         st.info("👋 Welcome! Please login using the sidebar to get started.")
         st.markdown("""
         ### What this app does:
-        1. **Scrapes** the dashboard at the specified URL
-        2. **Uses AI** to analyze and organize the content
-        3. **Highlights** claims that can move forward
-        4. **Creates** a structured worksheet for easy review
+        1. **Securely logs in** to the protected WaaS dashboard
+        2. **Scrapes** the workflow/cases dashboard content
+        3. **Uses AI** to analyze and organize the content
+        4. **Highlights** claims that can move forward
+        5. **Creates** a structured worksheet for easy review
         
         ### Getting Started:
         1. Enter your OpenAI API key in the sidebar
-        2. Login with your dashboard credentials
+        2. Login with your WaaS dashboard credentials
         3. Click "Scrape Dashboard" to gather data
         4. Use "Analyze with AI" to process the content
         """)
-    
-    # Cleanup on app close
-    if st.session_state.scraper:
-        st.session_state.scraper.close()
 
 def display_ai_analysis(analysis):
     """Display the AI analysis results in a structured format"""
