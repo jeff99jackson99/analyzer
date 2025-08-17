@@ -1,2 +1,1 @@
-chromium-chromedriver
-chromium
+# No system packages needed for Streamlit Cloud version
