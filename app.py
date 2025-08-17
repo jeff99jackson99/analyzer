@@ -2,15 +2,13 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-import openai
 import json
+import re
 from datetime import datetime
-import time
-import os
 
 # Page configuration
 st.set_page_config(
-    page_title="Dashboard Claims Analyzer",
+    page_title="WaaS Dashboard Claims Analyzer",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -20,38 +18,32 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.5rem;
-        color: #1f77b4;
         text-align: center;
+        color: #1f77b4;
+        font-size: 2.5rem;
         margin-bottom: 2rem;
     }
-    .status-ready {
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        border-radius: 5px;
-        padding: 10px;
-        margin: 5px 0;
-    }
-    .status-pending {
-        background-color: #fff3cd;
-        border: 1px solid #ffeaa7;
-        border-radius: 5px;
-        padding: 10px;
-        margin: 5px 0;
-    }
-    .metric-card {
-        background-color: #f8f9fa;
-        border-radius: 10px;
-        padding: 20px;
-        margin: 10px 0;
-        border-left: 4px solid #1f77b4;
-    }
+    
     .success-box {
         background-color: #d4edda;
         border: 1px solid #c3e6cb;
         border-radius: 5px;
         padding: 15px;
         margin: 15px 0;
+    }
+    
+    .metric-card {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 15px;
+        text-align: center;
+        margin: 10px 0;
+    }
+    
+    .stButton > button {
+        width: 100%;
+        margin: 5px 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -62,146 +54,33 @@ class DashboardScraper:
         self.is_authenticated = False
         self.cookies = {}
         
-    def login(self, username, password):
-        """Login to the dashboard using requests"""
+    def check_login_status(self):
+        """Check if we're currently logged in by trying to access the dashboard"""
         try:
-            # First, get the login page to capture any CSRF tokens
-            login_url = "https://app.waas.sdsaz.us/auth/login?returnUrl=%2Fcases%2Fworkflow%2F2"
-            response = self.session.get(login_url)
+            # Try to access the dashboard directly
+            dashboard_url = "https://app.waas.sdsaz.us/cases/workflow/2"
+            response = self.session.get(dashboard_url)
             
-            if response.status_code != 200:
-                st.error(f"Failed to access login page. Status: {response.status_code}")
-                return False
+            if response.status_code == 200:
+                # Check if we're actually logged in by looking for dashboard content
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Look for indicators that we're logged in
+                if any(indicator in response.url.lower() for indicator in ['dashboard', 'workflow', 'cases']):
+                    # Check if we're not on a login page
+                    login_indicators = soup.find_all(text=lambda text: text and any(
+                        login in text.lower() for login in ['login', 'sign in', 'username', 'password']
+                    ))
+                    
+                    if not login_indicators or len(login_indicators) < 3:
+                        self.is_authenticated = True
+                        self.cookies = self.session.cookies.get_dict()
+                        return True
             
-            # Parse the login page to find form fields
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Look for common form field names
-            username_field_name = None
-            password_field_name = None
-            
-            # Try to find username field
-            username_selectors = ['input[name="username"]', 'input[name="email"]', 'input[type="text"]']
-            for selector in username_selectors:
-                field = soup.select_one(selector)
-                if field and field.get('name'):
-                    username_field_name = field.get('name')
-                    break
-            
-            # Try to find password field
-            password_selectors = ['input[name="password"]', 'input[type="password"]']
-            for selector in password_selectors:
-                field = soup.select_one(selector)
-                if field and field.get('name'):
-                    password_field_name = field.get('name')
-                    break
-            
-            if not username_field_name or not password_field_name:
-                st.warning("⚠️ Could not automatically detect form fields. Using manual input.")
-                username_field_name = st.text_input("Enter username field name:", value="username")
-                password_field_name = st.text_input("Enter password field name:", value="password")
-            
-            # Prepare login data
-            login_data = {
-                username_field_name: username,
-                password_field_name: password
-            }
-            
-            # Look for CSRF token
-            csrf_token = soup.find('input', {'name': 'csrf'}) or soup.find('input', {'name': '_token'})
-            if csrf_token:
-                login_data[csrf_token.get('name')] = csrf_token.get('value')
-            
-            # Try different login approaches
-            success = False
-            
-            # Method 1: POST to login URL
-            try:
-                login_response = self.session.post(login_url, data=login_data, allow_redirects=True)
-                if login_response.status_code == 200:
-                    success = self._check_login_success(login_response)
-            except Exception as e:
-                st.info(f"POST method failed: {e}")
-            
-            # Method 2: POST to form action (if different from login_url)
-            if not success:
-                try:
-                    form = soup.find('form')
-                    if form and form.get('action'):
-                        form_action = form.get('action')
-                        if form_action.startswith('/'):
-                            form_action = "https://app.waas.sdsaz.us" + form_action
-                        elif not form_action.startswith('http'):
-                            form_action = "https://app.waas.sdsaz.us/" + form_action
-                        
-                        if form_action != login_url:
-                            login_response = self.session.post(form_action, data=login_data, allow_redirects=True)
-                            if login_response.status_code == 200:
-                                success = self._check_login_success(login_response)
-                except Exception as e:
-                    st.info(f"Form action POST failed: {e}")
-            
-            # Method 3: GET with params (for some systems)
-            if not success:
-                try:
-                    login_response = self.session.get(login_url, params=login_data, allow_redirects=True)
-                    if login_response.status_code == 200:
-                        success = self._check_login_success(login_response)
-                except Exception as e:
-                    st.info(f"GET method failed: {e}")
-            
-            # Method 4: Try with JSON content type
-            if not success:
-                try:
-                    headers = {'Content-Type': 'application/json'}
-                    login_response = self.session.post(login_url, json=login_data, headers=headers, allow_redirects=True)
-                    if login_response.status_code == 200:
-                        success = self._check_login_success(login_response)
-                except Exception as e:
-                    st.info(f"JSON POST failed: {e}")
-            
-            if success:
-                self.is_authenticated = True
-                self.cookies = self.session.cookies.get_dict()
-                return True
-            else:
-                st.error("All login methods failed. Please check credentials or contact support.")
-                return False
-            
-
-        except Exception as e:
-            st.error(f"❌ Login error: {e}")
             return False
-    
-    def _check_login_success(self, response):
-        """Check if login was successful by analyzing the response"""
-        try:
-            # Check if we're redirected to a dashboard page
-            if 'dashboard' in response.url.lower() or 'workflow' in response.url.lower() or 'cases' in response.url.lower():
-                st.success("✅ Login successful! Redirected to dashboard.")
-                return True
-            
-            # Check if login failed by looking for error messages
-            soup = BeautifulSoup(response.content, 'html.parser')
-            error_messages = soup.find_all(text=lambda text: text and any(
-                error in text.lower() for error in ['invalid', 'failed', 'incorrect', 'error']
-            ))
-            if error_messages:
-                st.warning(f"Login response contains errors: {' '.join(error_messages[:2])}")
-                return False
-            
-            # Check for success indicators
-            success_indicators = soup.find_all(text=lambda text: text and any(
-                success in text.lower() for success in ['success', 'welcome', 'dashboard']
-            ))
-            if success_indicators:
-                return True
-            
-            # Assume success if no errors and status is 200
-            return True
             
         except Exception as e:
-            st.warning(f"Error checking login success: {e}")
+            st.error(f"❌ Login check error: {e}")
             return False
     
     def scrape_dashboard(self, dashboard_url):
@@ -242,8 +121,8 @@ class DashboardScraper:
             return {
                 'content': content,
                 'tables': table_data,
-                'html': response.text,
-                'url': response.url
+                'url': dashboard_url,
+                'timestamp': datetime.now().isoformat()
             }
             
         except Exception as e:
@@ -252,29 +131,61 @@ class DashboardScraper:
 
 class AIProcessor:
     def __init__(self, api_key):
-        self.client = openai.OpenAI(api_key=api_key)
-    
-    def analyze_claims(self, dashboard_content):
-        """Use AI to analyze and organize dashboard content"""
+        self.api_key = api_key
+        
+    def analyze_claims(self, content):
+        """Analyze dashboard content using OpenAI"""
         try:
+            import openai
+            
+            # Configure OpenAI
+            openai.api_key = self.api_key
+            
+            # Create a comprehensive prompt for claims analysis
             prompt = f"""
-            Analyze the following dashboard content and organize it into a structured format.
-            Focus on identifying claims and their statuses. Highlight any claims that appear to be in a status
-            that suggests they can move forward (e.g., 'approved', 'ready', 'pending review', etc.).
+            Analyze the following dashboard content and organize it into a structured format. 
+            Focus on identifying claims that are ready for action or need attention.
+            
+            Please provide the analysis in the following JSON format:
+            {{
+                "summary": {{
+                    "total_claims": number,
+                    "ready_for_action": number,
+                    "needs_attention": number,
+                    "completed": number
+                }},
+                "ready_claims": [
+                    {{
+                        "claim_id": "string",
+                        "status": "string",
+                        "priority": "string",
+                        "next_action": "string",
+                        "notes": "string"
+                    }}
+                ],
+                "attention_needed": [
+                    {{
+                        "claim_id": "string",
+                        "status": "string",
+                        "issue": "string",
+                        "recommendation": "string"
+                    }}
+                ],
+                "general_notes": "string"
+            }}
             
             Dashboard Content:
-            {dashboard_content[:4000]}  # Limit content length for API
+            {content[:4000]}  # Limit content length for API
             
-            Please organize this into:
-            1. Summary of total claims
-            2. Claims by status category
-            3. Claims ready to move forward (highlight these)
-            4. Any actionable items or next steps
-            
-            Format as JSON with clear structure.
+            Focus on identifying:
+            1. Claims that can move forward in the workflow
+            2. Claims that are blocked or need attention
+            3. Priority levels and next actions
+            4. Any patterns or trends in the data
             """
             
-            response = self.client.chat.completions.create(
+            # Make API call
+            response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "You are a claims processing expert. Analyze dashboard data and identify actionable claims."},
@@ -290,13 +201,13 @@ class AIProcessor:
             return None
 
 def main():
-    st.markdown('<h1 class="main-header">📊 Dashboard Claims Analyzer</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">📊 WaaS Dashboard Claims Analyzer</h1>', unsafe_allow_html=True)
     
     # Show success message
     st.markdown("""
     <div class="success-box">
         <strong>🎉 Successfully Deployed on Streamlit Cloud!</strong><br>
-        This app is now working and ready to analyze your WaaS dashboard claims.
+        This app now uses a simple redirect-based authentication flow.
     </div>
     """, unsafe_allow_html=True)
     
@@ -307,18 +218,6 @@ def main():
         st.session_state.ai_processor = None
     if 'is_authenticated' not in st.session_state:
         st.session_state.is_authenticated = False
-    
-    # Load configuration from Streamlit secrets or environment
-    try:
-        import config
-        dashboard_base_url = config.Config.DASHBOARD_BASE_URL
-        dashboard_url = config.Config.DASHBOARD_URL
-        login_url = config.Config.LOGIN_URL
-    except:
-        # Fallback to environment variables or defaults
-        dashboard_base_url = "https://app.waas.sdsaz.us"
-        dashboard_url = "https://app.waas.sdsaz.us/cases/workflow/2"
-        login_url = "https://app.waas.sdsaz.us/auth/login?returnUrl=%2Fcases%2Fworkflow%2F2"
     
     # Sidebar for configuration
     with st.sidebar:
@@ -332,48 +231,51 @@ def main():
         # Dashboard URL
         dashboard_url = st.text_input(
             "Dashboard URL",
-            value=dashboard_url,
+            value="https://app.waas.sdsaz.us/cases/workflow/2",
             help="URL of the dashboard to scrape after login"
         )
         
-        # Login section
+        # Authentication section
         st.header("🔐 Authentication")
         
-        # Check if we have stored credentials
-        if 'stored_username' not in st.session_state:
-            st.session_state.stored_username = ""
-        if 'stored_password' not in st.session_state:
-            st.session_state.stored_password = ""
-        
-        # Credential input
-        username = st.text_input("Username", value=st.session_state.stored_username)
-        password = st.text_input("Password", type="password", value=st.session_state.stored_password)
-        
-        # Remember credentials option
-        remember_creds = st.checkbox("Remember credentials (stored in session only)")
-        
-        if st.button("Login", type="primary"):
-            if username and password:
-                with st.spinner("Logging in to dashboard..."):
-                    success = st.session_state.scraper.login(username, password)
-                    if success:
+        if not st.session_state.is_authenticated:
+            st.info("🔑 **New Authentication Flow:**")
+            st.markdown("""
+            1. **Click the button below** to go to WaaS dashboard
+            2. **Log in** with your credentials on the WaaS site
+            3. **Return to this app** and click "Check Login Status"
+            4. **Start scraping** once authenticated!
+            """)
+            
+            # Button to redirect to WaaS dashboard
+            if st.button("🚀 Go to WaaS Dashboard", type="primary"):
+                st.markdown(f"""
+                <div style="background-color: #e7f3ff; padding: 15px; border-radius: 5px; border: 1px solid #b3d9ff;">
+                    <h4>📋 Instructions:</h4>
+                    <ol>
+                        <li>Click the link below to open the WaaS dashboard</li>
+                        <li>Log in with your credentials</li>
+                        <li>Return to this app tab</li>
+                        <li>Click "Check Login Status" button</li>
+                    </ol>
+                    <p><strong>🔗 <a href="{dashboard_url}" target="_blank">Open WaaS Dashboard</a></strong></p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Check login status button
+            if st.button("🔍 Check Login Status", type="secondary"):
+                with st.spinner("Checking login status..."):
+                    if st.session_state.scraper.check_login_status():
                         st.session_state.is_authenticated = True
-                        if remember_creds:
-                            st.session_state.stored_username = username
-                            st.session_state.stored_password = password
-                        st.success("✅ Successfully logged into dashboard!")
+                        st.success("✅ Successfully authenticated with WaaS dashboard!")
+                        st.rerun()
                     else:
-                        st.error("❌ Login failed. Please check your credentials.")
-            else:
-                st.warning("⚠️ Please enter both username and password")
-        
-        # Show login status
-        if st.session_state.is_authenticated:
-            st.success("🔓 Logged in to dashboard")
+                        st.error("❌ Not authenticated. Please log in to the WaaS dashboard first.")
+        else:
+            st.success("🔓 **Authenticated with WaaS Dashboard**")
             if st.button("Logout"):
                 st.session_state.is_authenticated = False
-                st.session_state.stored_username = ""
-                st.session_state.stored_password = ""
+                st.session_state.scraper.is_authenticated = False
                 st.rerun()
     
     # Main content area
@@ -432,10 +334,10 @@ def main():
                 st.text(st.session_state.ai_analysis)
     
     else:
-        st.info("👋 Welcome! Please login using the sidebar to get started.")
+        st.info("👋 Welcome! Please use the sidebar to authenticate with the WaaS dashboard.")
         st.markdown("""
         ### What this app does:
-        1. **Securely logs in** to the protected WaaS dashboard
+        1. **Redirects you** to the WaaS dashboard for secure login
         2. **Scrapes** the workflow/cases dashboard content
         3. **Uses AI** to analyze and organize the content
         4. **Highlights** claims that can move forward
@@ -443,9 +345,10 @@ def main():
         
         ### Getting Started:
         1. Enter your OpenAI API key in the sidebar
-        2. Login with your WaaS dashboard credentials
-        3. Click "Scrape Dashboard" to gather data
-        4. Use "Analyze with AI" to process the content
+        2. Click "Go to WaaS Dashboard" to authenticate
+        3. Log in on the WaaS site
+        4. Return and click "Check Login Status"
+        5. Start scraping and analyzing!
         """)
 
 def display_ai_analysis(analysis):
@@ -461,62 +364,35 @@ def display_ai_analysis(analysis):
         
         with col2:
             st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.metric("Ready to Move", analysis.get('ready_claims', 'N/A'))
+            st.metric("Ready for Action", analysis.get('ready_for_action', 'N/A'))
             st.markdown('</div>', unsafe_allow_html=True)
         
         with col3:
             st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.metric("Pending Review", analysis.get('pending_claims', 'N/A'))
+            st.metric("Needs Attention", analysis.get('needs_attention', 'N/A'))
             st.markdown('</div>', unsafe_allow_html=True)
         
         with col4:
             st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.metric("Action Required", analysis.get('action_required', 'N/A'))
+            st.metric("Completed", analysis.get('completed', 'N/A'))
             st.markdown('</div>', unsafe_allow_html=True)
     
-    # Claims by status
-    if 'claims_by_status' in analysis:
-        st.subheader("📊 Claims by Status")
-        status_df = pd.DataFrame(analysis['claims_by_status'])
-        st.dataframe(status_df, use_container_width=True)
+    # Ready claims section
+    if 'ready_claims' in analysis and analysis['ready_claims']:
+        st.subheader("🚀 Claims Ready for Action")
+        ready_df = pd.DataFrame(analysis['ready_claims'])
+        st.dataframe(ready_df, use_container_width=True)
     
-    # Claims ready to move forward
-    if 'ready_claims' in analysis and isinstance(analysis['ready_claims'], list):
-        st.subheader("✅ Claims Ready to Move Forward")
-        for claim in analysis['ready_claims']:
-            st.markdown(f"""
-            <div class="status-ready">
-                <strong>{claim.get('claim_id', 'N/A')}</strong> - {claim.get('status', 'N/A')}
-                <br>Description: {claim.get('description', 'N/A')}
-                <br>Next Step: {claim.get('next_step', 'N/A')}
-            </div>
-            """, unsafe_allow_html=True)
+    # Attention needed section
+    if 'attention_needed' in analysis and analysis['attention_needed']:
+        st.subheader("⚠️ Claims Needing Attention")
+        attention_df = pd.DataFrame(analysis['attention_needed'])
+        st.dataframe(attention_df, use_container_width=True)
     
-    # Actionable items
-    if 'actionable_items' in analysis:
-        st.subheader("🎯 Actionable Items")
-        for item in analysis['actionable_items']:
-            st.markdown(f"""
-            <div class="status-pending">
-                <strong>{item.get('title', 'N/A')}</strong>
-                <br>{item.get('description', 'N/A')}
-                <br>Priority: {item.get('priority', 'N/A')}
-            </div>
-            """, unsafe_allow_html=True)
-    
-    # Export options
-    st.subheader("📤 Export Options")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("📊 Export to Excel"):
-            # Create Excel export logic here
-            st.success("Export functionality coming soon!")
-    
-    with col2:
-        if st.button("📄 Export to PDF"):
-            # Create PDF export logic here
-            st.success("Export functionality coming soon!")
+    # General notes
+    if 'general_notes' in analysis and analysis['general_notes']:
+        st.subheader("📝 General Notes")
+        st.info(analysis['general_notes'])
 
 if __name__ == "__main__":
     main()
