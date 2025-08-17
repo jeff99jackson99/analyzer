@@ -157,8 +157,61 @@ class DashboardScraper:
             # Parse the dashboard content
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Extract all text content
-            content = soup.get_text(separator=' ', strip=True)
+            # Debug: Show what we're actually getting
+            st.info(f"🔍 Scraping URL: {response.url}")
+            st.info(f"📄 Response Status: {response.status_code}")
+            
+            # Look for different types of content
+            content_parts = []
+            
+            # 1. Main content areas
+            main_selectors = [
+                'main', 'div[class*="main"]', 'div[id*="main"]', 
+                'div[class*="content"]', 'div[id*="content"]',
+                'div[class*="dashboard"]', 'div[id*="dashboard"]',
+                'div[class*="workflow"]', 'div[id*="workflow"]'
+            ]
+            
+            for selector in main_selectors:
+                elements = soup.select(selector)
+                for element in elements:
+                    text = element.get_text(separator=' ', strip=True)
+                    if text and len(text) > 10:  # Only add if meaningful content
+                        content_parts.append(f"[{selector}]: {text}")
+            
+            # 2. Look for iframes (embedded content)
+            iframes = soup.find_all('iframe')
+            if iframes:
+                st.info(f"🔍 Found {len(iframes)} iframe(s) - content might be embedded")
+                for i, iframe in enumerate(iframes):
+                    src = iframe.get('src')
+                    if src:
+                        content_parts.append(f"[iframe {i+1} src]: {src}")
+            
+            # 3. Look for JavaScript content
+            scripts = soup.find_all('script')
+            if scripts:
+                st.info(f"🔍 Found {len(scripts)} script(s) - content might be loaded dynamically")
+                for script in scripts:
+                    if script.string:
+                        script_content = script.string.strip()
+                        if len(script_content) > 50:  # Only show substantial scripts
+                            content_parts.append(f"[script]: {script_content[:200]}...")
+            
+            # 4. Look for data attributes that might contain content
+            data_elements = soup.find_all(attrs={"data-content": True})
+            if data_elements:
+                st.info(f"🔍 Found {len(data_elements)} elements with data-content")
+                for elem in data_elements:
+                    content_parts.append(f"[data-content]: {elem.get('data-content')}")
+            
+            # 5. Extract all text content as fallback
+            all_text = soup.get_text(separator=' ', strip=True)
+            if all_text:
+                content_parts.append(f"[all-text]: {all_text}")
+            
+            # Combine all content
+            full_content = "\n\n".join(content_parts)
             
             # Extract tables if they exist
             tables = soup.find_all('table')
@@ -175,11 +228,20 @@ class DashboardScraper:
                 if table_rows:
                     table_data.append(table_rows)
             
+            # Show what we found
+            if len(content_parts) > 1:
+                st.success(f"✅ Found {len(content_parts)} content sections")
+            else:
+                st.warning("⚠️ Limited content found - dashboard might use JavaScript")
+            
             return {
-                'content': content,
+                'content': full_content,
                 'tables': table_data,
                 'url': dashboard_url,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'content_sections': len(content_parts),
+                'iframes_found': len(iframes),
+                'scripts_found': len(scripts)
             }
             
         except Exception as e:
@@ -392,9 +454,13 @@ def main():
                         st.session_state.dashboard_data = dashboard_data
                         st.success("Dashboard scraped successfully!")
                         
+                        # Show scraping summary
+                        if 'content_sections' in dashboard_data:
+                            st.info(f"📊 Scraping Summary: {dashboard_data['content_sections']} content sections, {dashboard_data['iframes_found']} iframes, {dashboard_data['scripts_found']} scripts")
+                        
                         # Display raw content
                         with st.expander("📋 Raw Dashboard Content"):
-                            st.text(dashboard_data['content'][:1000] + "..." if len(dashboard_data['content']) > 1000 else dashboard_data['content'])
+                            st.text(dashboard_data['content'][:2000] + "..." if len(dashboard_data['content']) > 2000 else dashboard_data['content'])
                         
                         # Display tables if found
                         if dashboard_data['tables']:
@@ -403,6 +469,29 @@ def main():
                                 with st.expander(f"Table {i+1}"):
                                     df = pd.DataFrame(table[1:], columns=table[0])
                                     st.dataframe(df)
+                        
+                        # If limited content, suggest alternatives
+                        if dashboard_data.get('content_sections', 0) <= 1:
+                            st.warning("⚠️ Limited content found. The dashboard might:")
+                            st.markdown("""
+                            - **Use JavaScript** to load content dynamically
+                            - **Have embedded iframes** with the actual data
+                            - **Require specific user actions** to display content
+                            - **Use a different URL structure**
+                            
+                            **Try these alternatives:**
+                            """)
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.button("🔄 Try Dashboard/7"):
+                                    st.session_state.alternative_url = "https://app.waas.sdsaz.us/dashboard/7"
+                                    st.rerun()
+                            
+                            with col2:
+                                if st.button("🔄 Try Cases/Workflow"):
+                                    st.session_state.alternative_url = "https://app.waas.sdsaz.us/cases/workflow/2"
+                                    st.rerun()
             
             # AI Analysis section
             if 'dashboard_data' in st.session_state and st.session_state.ai_processor:
