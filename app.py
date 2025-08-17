@@ -191,11 +191,71 @@ class DashboardScraper:
             except Exception as e:
                 results.append({
                     'url': url,
-                    'status': 'Error',
                     'error': str(e),
                     'content_length': 0,
                     'table_count': 0,
                     'claims_indicators': 0,
+                    'preview': f"Error: {e}"
+                })
+        
+        return results
+    
+    def try_api_endpoints(self):
+        """Try to find and call API endpoints that the dashboard uses"""
+        api_endpoints = [
+            "/api/cases",
+            "/api/claims", 
+            "/api/workflow",
+            "/api/dashboard",
+            "/api/cases/workflow",
+            "/api/cases/status",
+            "/api/claims/status"
+        ]
+        
+        results = []
+        base_url = "https://app.waas.sdsaz.us"
+        
+        for endpoint in api_endpoints:
+            try:
+                url = base_url + endpoint
+                response = self.session.get(url, timeout=10)
+                
+                if response.status_code == 200:
+                    try:
+                        # Try to parse as JSON
+                        data = response.json()
+                        results.append({
+                            'endpoint': endpoint,
+                            'status': response.status_code,
+                            'data_type': 'JSON',
+                            'content_length': len(str(data)),
+                            'preview': str(data)[:200] + "..." if len(str(data)) > 200 else str(data)
+                        })
+                    except:
+                        # Not JSON, treat as text
+                        content = response.text
+                        results.append({
+                            'endpoint': endpoint,
+                            'status': response.status_code,
+                            'data_type': 'Text',
+                            'content_length': len(content),
+                            'preview': content[:200] + "..." if len(content) > 200 else content
+                        })
+                else:
+                    results.append({
+                        'endpoint': endpoint,
+                        'status': response.status_code,
+                        'data_type': 'Error',
+                        'content_length': 0,
+                        'preview': f"HTTP {response.status_code}"
+                    })
+                    
+            except Exception as e:
+                results.append({
+                    'endpoint': endpoint,
+                    'status': 'Error',
+                    'data_type': 'Exception',
+                    'content_length': 0,
                     'preview': f"Error: {e}"
                 })
         
